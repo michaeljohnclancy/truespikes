@@ -34,8 +34,6 @@ def parse_sf_results(
         group_by = 'studyName'
     elif by_recording:
         group_by = 'recordingName'
-    else:
-        raise ValueError("Please specify the attribute to split by")
 
     with open(LOG_PATH / f'parse_sf_results-{datetime.now().strftime("%Y%m%d%H%M%S")}.log', 'w') as logfile:
         results = None
@@ -75,9 +73,14 @@ def parse_sf_results(
             train_test_split=train_test_split
         )
     elif train_test_split:
-        metrics = results.drop(columns=['fp', 'sorterName', 'studyName', 'recordingName'])
+        if include_meta:
+            metrics = results.drop(columns=['sorterName', 'studyName', 'recordingName'])
+        else:
+            metrics = results.drop(columns=['fp'])
+
         fp = results['fp']
-        results = model_selection.train_test_split(metrics, fp, test_size=0.2, random_state=0)
+        X_train, X_test, y_train, y_test = model_selection.train_test_split(metrics, fp, test_size=0.2, random_state=0)
+        results = {'X_train': X_train, 'y_train': y_train, 'X_test': X_test, 'y_test': y_test}
     else:
         results = results.drop(columns=['sorterName', 'studyName', 'recordingName'])
 
@@ -122,3 +125,24 @@ def _split_dataset(df: pd.DataFrame, group_by: str, remove_meta: bool = True, tr
         else:
             datasets[attr_name] = df.drop(columns=['sorterName', 'studyName', 'recordingName'])
     return datasets
+
+
+def get_performance_matrix(datasets, model, metric=None):
+    # Takes a dict with keys=sorter_names and values=the associated dataset
+    sorter_names = datasets.keys()
+
+    performance_matrix = pd.DataFrame(index=sorter_names, columns=sorter_names)
+    for train_sorter_name in sorter_names:
+        model.fit(datasets[train_sorter_name]['X_train'], datasets[train_sorter_name]['y_train'])
+
+        for test_sorter_name in sorter_names:
+            if metric is None:
+                performance_matrix[train_sorter_name][test_sorter_name] = model.score(
+                    datasets[test_sorter_name]['X_test'], datasets[test_sorter_name]['y_test'])
+            else:
+                y_preds = model.predict(datasets[test_sorter_name]['X_test'])
+                performance_matrix[train_sorter_name][test_sorter_name] = metric(datasets[test_sorter_name]['y_test'],
+                                                                                 y_preds)
+
+    return performance_matrix
+
