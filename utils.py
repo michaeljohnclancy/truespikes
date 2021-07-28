@@ -11,6 +11,7 @@ LOG_PATH = Path('logs')
 LOG_PATH.mkdir(exist_ok=True)
 
 
+
 def parse_sf_results(
         sf_data, sorter_names: Optional[List[str]] = None, study_names: Optional[List[str]] = None,
         exclude_sorter_names: Optional[List[str]] = None, exclude_study_names: Optional[List[str]] = None,
@@ -151,16 +152,3 @@ def get_performance_matrix(datasets, model, metric=None):
                                                                                  y_preds)
 
     return performance_matrix
-
-
-class LogitRegression(LinearRegression):
-
-    def fit(self, x, p):
-        p = np.asarray(p)
-        p = p * 1e-16 + 0.5 * 1e-16
-        y = np.log(p / (1 - p))
-        return super().fit(x, y)
-
-    def predict(self, x):
-        y = super().predict(x)
-        return 1 / (np.exp(-y) + 1)
