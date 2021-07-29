@@ -1,10 +1,15 @@
-from pathlib import Path
 from typing import List, Dict, Optional
 
 import sortingview as sv
 import kachery_client as kc
 
-STUDY_SET_METADATA_URL = 'sha1://f728d5bf1118a8c6e2dfee7c99efb0256246d1d3/studysets.json'
+import requests
+
+
+def get_recent_study_set_url() -> str:
+    return requests.get(
+        'https://raw.githubusercontent.com/flatironinstitute/spikeforest_recordings/master/recordings/studysets'
+    ).text
 
 
 def _get_sf_metadata(study_set_name: Optional[str] = None,
@@ -15,7 +20,7 @@ def _get_sf_metadata(study_set_name: Optional[str] = None,
     if recording_name is not None and study_name is None:
         raise ValueError("If a recording name is provided, a substudy must also be provided.")
 
-    metadata = kc.load_json(STUDY_SET_METADATA_URL)['StudySets']
+    metadata = kc.load_json(get_recent_study_set_url())['StudySets']
     if study_set_name is not None:
         metadata = [m for m in metadata if m['name'].lower() == study_set_name.lower()][0]
     if study_name is not None:
@@ -114,4 +119,4 @@ class StudySet:
 
     def get_study(self, name: str) -> Study:
         return [Study(name=study['name'], study_set_name=study['studySetName'], recordings=study['recordings'],
-                      self_reference=study['self_reference']) for study in self._studies if study['name'] == name][0]
+                      self_reference=study['self_reference']) for study in self._studies if study['name'].lower() == name.lower()][0]
