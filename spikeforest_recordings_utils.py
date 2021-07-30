@@ -12,18 +12,7 @@ class RecordingSet:
 
     @staticmethod
     def load(study_set_name: str, study_name: str, recording_name: str):
-        recording_set_metadata = _get_sf_metadata(study_set_name, study_name, recording_name)
-        return RecordingSet(name=recording_set_metadata['name'],
-                            study_name=recording_set_metadata['studyName'],
-                            study_set_name=recording_set_metadata['studySetName'],
-                            sample_rate_hz=recording_set_metadata['sampleRateHz'],
-                            num_channels=recording_set_metadata['numChannels'],
-                            duration_sec=recording_set_metadata['durationSec'],
-                            num_true_units=recording_set_metadata['numTrueUnits'],
-                            spike_sign=recording_set_metadata['spikeSign'],
-                            recording_uri=recording_set_metadata['recordingUri'],
-                            sorting_true_uri=recording_set_metadata['sortingTrueUri']
-                            )
+        return RecordingSet.deserialize(_get_sf_metadata(study_set_name, study_name, recording_name))
 
     def __init__(self, name: str, study_name: str, study_set_name: str, sample_rate_hz: int, num_channels: int,
                  duration_sec: float, num_true_units: int, spike_sign: int, recording_uri: str, sorting_true_uri: str):
@@ -67,58 +56,70 @@ class RecordingSet:
                               sorting_format='mda')
         )
 
+    @staticmethod
+    def deserialize(recording_set: Dict):
+        return RecordingSet(name=recording_set['name'], study_name=recording_set['studyName'],
+                            study_set_name=recording_set['studySetName'], sample_rate_hz=recording_set['sampleRateHz'],
+                            num_channels=recording_set['numChannels'], duration_sec=recording_set['durationSec'],
+                            num_true_units=recording_set['numTrueUnits'], spike_sign=recording_set['spikeSign'],
+                            recording_uri=recording_set['recordingUri'], sorting_true_uri=recording_set['sortingTrueUri'])
+
 
 class Study:
 
     @staticmethod
     def load(study_set_name: str, study_name: str):
-        study_metadata = _get_sf_metadata(study_set_name, study_name)
-        return _parse_study(study_metadata)
+        return Study.deserialize(_get_sf_metadata(study_set_name, study_name))
 
-    def __init__(self, name: str, study_set_name: str, recordings: List[Dict], self_reference: str):
-        self._name = name
-        self._recording_sets = recordings
-        self._study_set_name = study_set_name
-        self._self_reference = self_reference
+    def __init__(self, name: str, study_set_name: str, recordings: List[RecordingSet]):
+        self.name = name
+        self.recording_sets = recordings
+        self.study_set_name = study_set_name
 
     def get_recording_names(self) -> List[str]:
-        return [recording['name'] for recording in self._recording_sets]
+        return [recording.name for recording in self.recording_sets]
 
     def get_recording_set(self, name) -> RecordingSet:
         try:
-            return [_parse_recording_set(recording)
-                    for recording in self._recording_sets if recording['name'].lower() == name.lower()][0]
+            return [recording_set for recording_set in self.recording_sets
+                    if recording_set.name.lower() == name.lower()][0]
         except IndexError:
             raise ValueError('Recording set not found')
 
     def get_recording_sets(self) -> List[RecordingSet]:
-        return [_parse_recording_set(recording_set) for recording_set in self._recording_sets]
+        return self.recording_sets
+
+    @staticmethod
+    def deserialize(study: Dict):
+        return Study(name=study['name'], study_set_name=study['studySetName'],
+                     recordings=[RecordingSet.deserialize(recording) for recording in study['recordings']],
+                     )
 
 
 class StudySet:
 
     @staticmethod
     def load(study_set_name: str):
-        study_set_metadata = _get_sf_metadata(study_set_name=study_set_name)
-        return StudySet(name=study_set_metadata['name'],
-                        studies=study_set_metadata['studies'],
-                        self_reference=study_set_metadata['self_reference']
-                        )
+        return StudySet.deserialize(_get_sf_metadata(study_set_name=study_set_name))
 
-    def __init__(self, name: str, studies: List[Dict], self_reference: str):
+    def __init__(self, name: str, studies: List[Study]):
         self.name = name
         self._studies = studies
-        self._self_reference = self_reference
 
     def get_study_names(self) -> List[str]:
-        return [study['name'] for study in self._studies]
+        return [study.name for study in self._studies]
 
     def get_study(self, name: str) -> Study:
         try:
-            return [_parse_study(study)
-                    for study in self._studies if study['name'].lower() == name.lower()][0]
+            return [study for study in self._studies if study.name.lower() == name.lower()][0]
         except IndexError:
             raise ValueError('Study not found')
+
+    @staticmethod
+    def deserialize(study_set: Dict):
+        return StudySet(name=study_set['name'],
+                        studies=[Study.deserialize(study) for study in study_set['studies']],
+                        )
 
 
 def _get_recent_study_set_url() -> str:
@@ -166,16 +167,3 @@ def _wrap_sorting_uri(firings_url: str, sample_rate: int, sorting_format: str):
             'samplerate': sample_rate
         }
     }
-
-
-def _parse_recording_set(recording: Dict) -> RecordingSet:
-    return RecordingSet(name=recording['name'], study_name=recording['studyName'],
-                        study_set_name=recording['studySetName'], sample_rate_hz=recording['sampleRateHz'],
-                        num_channels=recording['numChannels'], duration_sec=recording['durationSec'],
-                        num_true_units=recording['numTrueUnits'], spike_sign=recording['spikeSign'],
-                        recording_uri=recording['recordingUri'], sorting_true_uri=recording['sortingTrueUri'])
-
-
-def _parse_study(study: Dict) -> Study:
-    return Study(name=study['name'], study_set_name=study['studySetName'], recordings=study['recordings'],
-                 self_reference=study['self_reference'])
