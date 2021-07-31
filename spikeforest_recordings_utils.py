@@ -1,11 +1,13 @@
+import requests
 from typing import List, Dict, Optional
 
 import sortingview as sv
 import kachery_client as kc
 
-import requests
 
 SF_SORTING_URI = 'sha1://52f24579bb2af1557ce360ed5ccc68e480928285/sortings.json'
+SF_METRIC_URI = 'sha1://b3444629251cafda919af535f0e9837279151c6e/spikeforest-full-gt-qm.json?' \
+                'manifest=cf73c99d06c11e328e635e14dc24b8db7372db3d'
 
 
 class RecordingSet:
@@ -128,7 +130,7 @@ def _get_recent_study_set_url() -> str:
     ).text
 
 
-def _get_sf_metadata(study_set_name: Optional[str] = None,
+def _get_sf_metadata(study_set_name: str,
                      study_name: Optional[str] = None,
                      recording_name: Optional[str] = None) -> Dict:
     if study_set_name is None:
@@ -136,9 +138,11 @@ def _get_sf_metadata(study_set_name: Optional[str] = None,
     if recording_name is not None and study_name is None:
         raise ValueError("If a recording name is provided, a substudy must also be provided.")
 
-    metadata = kc.load_json(_get_recent_study_set_url())['StudySets']
-    if study_set_name is not None:
-        metadata = [m for m in metadata if m['name'].lower() == study_set_name.lower()][0]
+    metadata = [
+        m for m in kc.load_json(_get_recent_study_set_url())['StudySets']
+        if m['name'].lower() == study_set_name.lower()
+    ][0]
+
     if study_name is not None:
         metadata = [m for m in metadata['studies'] if m['name'].lower() == study_name.lower()][0]
     if recording_name is not None:
@@ -147,19 +151,46 @@ def _get_sf_metadata(study_set_name: Optional[str] = None,
     return metadata
 
 
+def _filter_sf_metadata(
+        metadata_url: str,
+        sorter_name: Optional[str] = None,
+        recording_name: Optional[str] = None,
+        study_name: Optional[str] = None
+) -> List[Dict]:
+    metadata = kc.load_json(metadata_url)
+    return [m for m in metadata if
+            (sorter_name is None or m['sorterName'].lower() == sorter_name.lower())
+            and (recording_name is None or m['recordingName'].lower() == recording_name.lower())
+            and (study_name is None or m['studyName'].lower() == study_name.lower())]
+
+
 def _get_sorting_metadata(
         sorter_name: Optional[str] = None,
         recording_name: Optional[str] = None,
         study_name: Optional[str] = None
 ) -> List[Dict]:
-    sortings = kc.load_json(SF_SORTING_URI)
-    return [sorting for sorting in sortings if
-            (sorter_name is None or sorting['sorterName'].lower() == sorter_name.lower())
-            and (recording_name is None or sorting['recordingName'].lower() == recording_name.lower())
-            and (study_name is None or sorting['studyName'].lower() == study_name.lower())]
+    return _filter_sf_metadata(
+        metadata_url=SF_SORTING_URI,
+        sorter_name=sorter_name,
+        recording_name=recording_name,
+        study_name=study_name
+    )
 
 
-def _wrap_sorting_uri(firings_url: str, sample_rate: int, sorting_format: str):
+def _get_metric_metadata(
+        study_name: str,
+        recording_name: str,
+        sorter_name: str
+) -> List[Dict]:
+    return _filter_sf_metadata(
+        metadata_url=SF_METRIC_URI,
+        sorter_name=sorter_name,
+        recording_name=recording_name,
+        study_name=study_name
+    )
+
+
+def _wrap_sorting_uri(firings_url: str, sample_rate: int, sorting_format: str) -> Dict:
     return {
         'sorting_format': sorting_format,
         'data': {
