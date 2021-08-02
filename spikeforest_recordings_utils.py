@@ -1,23 +1,88 @@
 import requests
+import datetime
 from typing import List, Dict, Optional
 
 import sortingview as sv
 import kachery_client as kc
-
 
 SF_SORTING_URI = 'sha1://52f24579bb2af1557ce360ed5ccc68e480928285/sortings.json'
 SF_METRIC_URI = 'sha1://b3444629251cafda919af535f0e9837279151c6e/spikeforest-full-gt-qm.json?' \
                 'manifest=cf73c99d06c11e328e635e14dc24b8db7372db3d'
 
 
-class RecordingSet:
+def get_sf_metric_gt_pair(sorter_name: str, recording_name: str, study_name: str):
+    try:
+        metric_metadata = _get_metric_metadata(
+            sorter_name=sorter_name,
+            recording_name=recording_name,
+            study_name=study_name
+        )[0]
+    except IndexError:
+        raise ValueError('Invalid sorter name or metrics not found')
+
+    return {'metrics': metric_metadata['quality_metric'], 'gt_comparison': metric_metadata['ground_truth_comparison']}
+
+
+class SFSorting:
+
+    @staticmethod
+    def load(sorter_name: str, study_name: str, recording_name: str):
+        try:
+            sorting_metadata = _get_sorting_metadata(
+                sorter_name=sorter_name,
+                recording_name=recording_name,
+                study_name=study_name
+            )[0]
+        except IndexError:
+            raise ValueError('Invalid sorter name or sorting not found')
+
+        return SFSorting.deserialize(sorting_metadata)
+
+    def __init__(self, identifier: str, recording_name: str, study_name: str,
+                 sorter_name: str, sorter_version: str, sorting_parameters: Dict,
+                 firings_url: str, recording_url: str, ground_truth_url: str, run_date: datetime.datetime):
+        self.identifier = identifier
+        self.recording_name = recording_name
+        self.study_name = study_name
+        self.sorter_name = sorter_name
+        self.sorter_version = sorter_version
+        self.sorting_parameters = sorting_parameters
+        self.firings_url = firings_url
+        self.recording_url = recording_url
+        self.ground_truth_url = ground_truth_url
+        self.run_date = run_date
+
+    def get_sorting_extractor(self):
+        return _build_sorting_extractor(firings_url=self.firings_url, sample_rate_hz=self._get_sample_rate())
+
+    def get_metrics(self, metric_names: Optional[List[str]]):
+        raise NotImplementedError
+
+    def get_agreement_scores(self):
+        raise NotImplementedError
+
+    def _get_sample_rate(self):
+        recording_dict = kc.load_json(self.recording_url)
+        return recording_dict['params']['samplerate']
+
+    @staticmethod
+    def deserialize(sorting: Dict):
+        return SFSorting(
+            identifier=sorting['_id'], recording_name=sorting['recordingName'], study_name=sorting['studyName'],
+            sorter_name=sorting['sorterName'], sorter_version=sorting['processorVersion'],
+            sorting_parameters=sorting['sorterParameters'], firings_url=sorting['firingsUri'],
+            recording_url=sorting['recordingUri'], ground_truth_url=sorting['sortingTrueUri'],
+            run_date=sorting['startTime'])
+
+
+class SFRecording:
 
     @staticmethod
     def load(study_set_name: str, study_name: str, recording_name: str):
-        return RecordingSet.deserialize(_get_sf_metadata(study_set_name, study_name, recording_name))
+        return SFRecording.deserialize(_get_study_set_metadata(study_set_name, study_name, recording_name))
 
     def __init__(self, name: str, study_name: str, study_set_name: str, sample_rate_hz: int, num_channels: int,
-                 duration_sec: float, num_true_units: int, spike_sign: int, recording_uri: str, sorting_true_uri: str):
+                 duration_sec: float, num_true_units: int, spike_sign: int, recording_url: str, sorting_true_url: str):
         self.name = name
         self.study_name = study_name
         self.study_set_name = study_set_name
@@ -26,54 +91,38 @@ class RecordingSet:
         self.duration_sec = duration_sec
         self.num_true_units = num_true_units
         self.spike_sign = spike_sign
-        self.recording_uri = recording_uri
-        self.sorting_true_uri = sorting_true_uri
+        self.recording_url = recording_url
+        self.sorting_true_url = sorting_true_url
 
     def get_recording(self, download: Optional[bool] = False) -> sv.LabboxEphysRecordingExtractor:
-        return sv.LabboxEphysRecordingExtractor(self.recording_uri, download=download)
+        return sv.LabboxEphysRecordingExtractor(self.recording_url, download=download)
 
     def get_ground_truth(self) -> sv.LabboxEphysSortingExtractor:
-        return sv.LabboxEphysSortingExtractor(self.sorting_true_uri)
+        return sv.LabboxEphysSortingExtractor(self.sorting_true_url)
 
-    def get_sorting(self, sorter_name: str) -> sv.LabboxEphysSortingExtractor:
-        try:
-            sorting_metadata = _get_sorting_metadata(
-                sorter_name=sorter_name, recording_name=self.name, study_name=self.study_name)[0]
-        except IndexError:
-            raise ValueError('Invalid sorter name or sorting not found.')
-        return self._build_sorting(sorting_metadata['firings'])
+    def get_sorting(self, sorter_name: str) -> SFSorting:
+        return SFSorting.load(sorter_name=sorter_name, recording_name=self.name, study_name=self.study_name)
 
-    def get_all_sortings(self) -> Dict[str, sv.LabboxEphysSortingExtractor]:
-        sorting_metadata = _get_sorting_metadata(
-            recording_name=self.name, study_name=self.study_name)
-        return {
-            sorting['sorterName']: self._build_sorting(firing_url=sorting['firings'])
-            for sorting in sorting_metadata
-        }
-
-    def _build_sorting(self, firing_url: str) -> sv.LabboxEphysSortingExtractor:
-        return sv.LabboxEphysSortingExtractor(
-            _wrap_sorting_uri(firings_url=firing_url,
-                              sample_rate=self.sample_rate_hz,
-                              sorting_format='mda')
-        )
+    def get_all_sortings(self) -> List[SFSorting]:
+        return [SFSorting.deserialize(sorting_dict) for sorting_dict in
+                _get_sorting_metadata(recording_name=self.name, study_name=self.study_name)]
 
     @staticmethod
     def deserialize(recording_set: Dict):
-        return RecordingSet(name=recording_set['name'], study_name=recording_set['studyName'],
-                            study_set_name=recording_set['studySetName'], sample_rate_hz=recording_set['sampleRateHz'],
-                            num_channels=recording_set['numChannels'], duration_sec=recording_set['durationSec'],
-                            num_true_units=recording_set['numTrueUnits'], spike_sign=recording_set['spikeSign'],
-                            recording_uri=recording_set['recordingUri'], sorting_true_uri=recording_set['sortingTrueUri'])
+        return SFRecording(name=recording_set['name'], study_name=recording_set['studyName'],
+                           study_set_name=recording_set['studySetName'], sample_rate_hz=recording_set['sampleRateHz'],
+                           num_channels=recording_set['numChannels'], duration_sec=recording_set['durationSec'],
+                           num_true_units=recording_set['numTrueUnits'], spike_sign=recording_set['spikeSign'],
+                           recording_url=recording_set['recordingUri'], sorting_true_url=recording_set['sortingTrueUri'])
 
 
-class Study:
+class SFStudy:
 
     @staticmethod
     def load(study_set_name: str, study_name: str):
-        return Study.deserialize(_get_sf_metadata(study_set_name, study_name))
+        return SFStudy.deserialize(_get_study_set_metadata(study_set_name, study_name))
 
-    def __init__(self, name: str, study_set_name: str, recordings: List[RecordingSet]):
+    def __init__(self, name: str, study_set_name: str, recordings: List[SFRecording]):
         self.name = name
         self.recording_sets = recordings
         self.study_set_name = study_set_name
@@ -81,37 +130,34 @@ class Study:
     def get_recording_names(self) -> List[str]:
         return [recording.name for recording in self.recording_sets]
 
-    def get_recording_set(self, name) -> RecordingSet:
+    def get_recording(self, name) -> SFRecording:
         try:
             return [recording_set for recording_set in self.recording_sets
                     if recording_set.name.lower() == name.lower()][0]
         except IndexError:
             raise ValueError('Recording set not found')
 
-    def get_recording_sets(self) -> List[RecordingSet]:
-        return self.recording_sets
-
     @staticmethod
     def deserialize(study: Dict):
-        return Study(name=study['name'], study_set_name=study['studySetName'],
-                     recordings=[RecordingSet.deserialize(recording) for recording in study['recordings']],
-                     )
+        return SFStudy(name=study['name'], study_set_name=study['studySetName'],
+                       recordings=[SFRecording.deserialize(recording) for recording in study['recordings']],
+                       )
 
 
-class StudySet:
+class SFStudySet:
 
     @staticmethod
     def load(study_set_name: str):
-        return StudySet.deserialize(_get_sf_metadata(study_set_name=study_set_name))
+        return SFStudySet.deserialize(_get_study_set_metadata(study_set_name=study_set_name))
 
-    def __init__(self, name: str, studies: List[Study]):
+    def __init__(self, name: str, studies: List[SFStudy]):
         self.name = name
         self._studies = studies
 
     def get_study_names(self) -> List[str]:
         return [study.name for study in self._studies]
 
-    def get_study(self, name: str) -> Study:
+    def get_study(self, name: str) -> SFStudy:
         try:
             return [study for study in self._studies if study.name.lower() == name.lower()][0]
         except IndexError:
@@ -119,9 +165,9 @@ class StudySet:
 
     @staticmethod
     def deserialize(study_set: Dict):
-        return StudySet(name=study_set['name'],
-                        studies=[Study.deserialize(study) for study in study_set['studies']],
-                        )
+        return SFStudySet(name=study_set['name'],
+                          studies=[SFStudy.deserialize(study) for study in study_set['studies']],
+                          )
 
 
 def _get_recent_study_set_url() -> str:
@@ -130,13 +176,15 @@ def _get_recent_study_set_url() -> str:
     ).text
 
 
-def _get_sf_metadata(study_set_name: str,
-                     study_name: Optional[str] = None,
-                     recording_name: Optional[str] = None) -> Dict:
+def _get_study_set_metadata(
+        study_set_name: str,
+        study_name: Optional[str] = None,
+        recording_name: Optional[str] = None
+) -> Dict:
     if study_set_name is None:
         raise ValueError("Must provide a study_set name!")
     if recording_name is not None and study_name is None:
-        raise ValueError("If a recording name is provided, a substudy must also be provided.")
+        raise ValueError("If a recording name is provided, a study name must also be provided.")
 
     metadata = [
         m for m in kc.load_json(_get_recent_study_set_url())['StudySets']
@@ -149,19 +197,6 @@ def _get_sf_metadata(study_set_name: str,
         metadata = [m for m in metadata['recordings'] if m['name'].lower() == recording_name.lower()][0]
 
     return metadata
-
-
-def _filter_sf_metadata(
-        metadata_url: str,
-        sorter_name: Optional[str] = None,
-        recording_name: Optional[str] = None,
-        study_name: Optional[str] = None
-) -> List[Dict]:
-    metadata = kc.load_json(metadata_url)
-    return [m for m in metadata if
-            (sorter_name is None or m['sorterName'].lower() == sorter_name.lower())
-            and (recording_name is None or m['recordingName'].lower() == recording_name.lower())
-            and (study_name is None or m['studyName'].lower() == study_name.lower())]
 
 
 def _get_sorting_metadata(
@@ -190,11 +225,27 @@ def _get_metric_metadata(
     )
 
 
-def _wrap_sorting_uri(firings_url: str, sample_rate: int, sorting_format: str) -> Dict:
-    return {
-        'sorting_format': sorting_format,
-        'data': {
-            'firings': firings_url,
-            'samplerate': sample_rate
+def _filter_sf_metadata(
+        metadata_url: str,
+        sorter_name: Optional[str] = None,
+        recording_name: Optional[str] = None,
+        study_name: Optional[str] = None
+) -> List[Dict]:
+    metadata = kc.load_json(metadata_url)
+    return [m for m in metadata if
+            (sorter_name is None or m['sorterName'].lower() == sorter_name.lower())
+            and (recording_name is None or m['recordingName'].lower() == recording_name.lower())
+            and (study_name is None or m['studyName'].lower() == study_name.lower())]
+
+
+def _build_sorting_extractor(firings_url: str, sample_rate_hz: int,
+                             sorting_format: Optional[str] = 'mda') -> sv.LabboxEphysSortingExtractor:
+    return sv.LabboxEphysSortingExtractor(
+        {
+            'sorting_format': sorting_format,
+            'data': {
+                'firings': firings_url,
+                'samplerate': sample_rate_hz
+            }
         }
-    }
+    )
