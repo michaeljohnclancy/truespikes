@@ -1,3 +1,4 @@
+import pandas as pd
 import requests
 import datetime
 from typing import List, Dict, Optional
@@ -10,20 +11,8 @@ SF_METRIC_URI = 'sha1://b3444629251cafda919af535f0e9837279151c6e/spikeforest-ful
                 'manifest=cf73c99d06c11e328e635e14dc24b8db7372db3d'
 
 
-def get_sf_metric_gt_pair(sorter_name: str, recording_name: str, study_name: str):
-    try:
-        metric_metadata = _get_metric_metadata(
-            sorter_name=sorter_name,
-            recording_name=recording_name,
-            study_name=study_name
-        )[0]
-    except IndexError:
-        raise ValueError('Invalid sorter name or metrics not found')
-
-    return {'metrics': metric_metadata['quality_metric'], 'gt_comparison': metric_metadata['ground_truth_comparison']}
-
-
 class SFSorting:
+    _metric_data: Optional[Dict] = None
 
     @staticmethod
     def load(sorter_name: str, study_name: str, recording_name: str):
@@ -52,25 +41,49 @@ class SFSorting:
         self.ground_truth_url = ground_truth_url
         self.run_date = run_date
 
-    def get_sorting_extractor(self):
-        return _build_sorting_extractor(firings_url=self.firings_url, sample_rate_hz=self._get_sample_rate())
+    def get_sorting_extractor(self) -> sv.LabboxEphysSortingExtractor:
+        return _build_sorting_extractor(firings_url=self.firings_url, sample_rate_hz=self._get_sample_rate_hz())
 
-    def get_metrics(self, metric_names: Optional[List[str]]):
-        raise NotImplementedError
+    def get_metrics(self, metric_names: Optional[List[str]] = None) -> pd.DataFrame:
+        self._update_metric_data()
+        metrics = pd.DataFrame(self._metric_data['quality_metric'])
+        if metric_names:
+            metrics.drop(columns=set(metrics.keys()) - set(metric_names), inplace=True)
+        return metrics
 
-    def get_agreement_scores(self):
-        raise NotImplementedError
+    def get_agreement_scores(self) -> pd.DataFrame:
+        self._update_metric_data()
+        return pd.DataFrame(self._metric_data['ground_truth_comparison']['agreement_scores'])
 
-    def _get_sample_rate(self):
+    def get_best_match_12(self) -> pd.Series:
+        self._update_metric_data()
+        return pd.Series(self._metric_data['ground_truth_comparison']['best_match_12'])
+
+    def get_best_match_21(self) -> pd.Series:
+        self._update_metric_data()
+        return pd.Series(self._metric_data['ground_truth_comparison']['best_match_21'])
+
+    def _get_sample_rate_hz(self) -> int:
         recording_dict = kc.load_json(self.recording_url)
-        return recording_dict['params']['samplerate']
+        return int(recording_dict['params']['samplerate'])
 
+    def _update_metric_data(self):
+        if self._metric_data is None:
+            try:
+                self._metric_data = _get_metric_metadata(
+                    sorter_name=self.sorter_name,
+                    recording_name=self.recording_name,
+                    study_name=self.study_name
+                )[0]
+            except IndexError:
+                raise ValueError('Metrics not found')
+        
     @staticmethod
     def deserialize(sorting: Dict):
         return SFSorting(
             identifier=sorting['_id'], recording_name=sorting['recordingName'], study_name=sorting['studyName'],
             sorter_name=sorting['sorterName'], sorter_version=sorting['processorVersion'],
-            sorting_parameters=sorting['sorterParameters'], firings_url=sorting['firingsUri'],
+            sorting_parameters=sorting['sortingParameters'], firings_url=sorting['firings'],
             recording_url=sorting['recordingUri'], ground_truth_url=sorting['sortingTrueUri'],
             run_date=sorting['startTime'])
 
@@ -94,7 +107,7 @@ class SFRecording:
         self.recording_url = recording_url
         self.sorting_true_url = sorting_true_url
 
-    def get_recording(self, download: Optional[bool] = False) -> sv.LabboxEphysRecordingExtractor:
+    def get_recording_extractor(self, download: Optional[bool] = False) -> sv.LabboxEphysRecordingExtractor:
         return sv.LabboxEphysRecordingExtractor(self.recording_url, download=download)
 
     def get_ground_truth(self) -> sv.LabboxEphysSortingExtractor:
