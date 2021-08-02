@@ -41,8 +41,12 @@ class SFSorting:
         self.ground_truth_url = ground_truth_url
         self.run_date = run_date
 
-    def get_sorting_extractor(self) -> sv.LabboxEphysSortingExtractor:
-        return _build_sorting_extractor(firings_url=self.firings_url, sample_rate_hz=self._get_sample_rate_hz())
+    def get_sorting_extractor(self, sorting_format: str = 'mda') -> sv.LabboxEphysSortingExtractor:
+        return _build_sorting_extractor(
+            firings_url=self.firings_url,
+            sample_rate_hz=self._get_sample_rate_hz(),
+            sorting_format=sorting_format
+        )
 
     def get_metrics(self, metric_names: Optional[List[str]] = None) -> pd.DataFrame:
         self._update_metric_data()
@@ -166,9 +170,11 @@ class SFStudySet:
     def load(study_set_name: str):
         return SFStudySet.deserialize(_get_study_set_metadata(study_set_name=study_set_name))
 
-    def __init__(self, name: str, studies: List[SFStudy]):
+    def __init__(self, name: str, studies: List[SFStudy], description: str, info: Dict):
         self.name = name
         self._studies = studies
+        self.description = description
+        self.info = info
 
     def get_study_names(self) -> List[str]:
         return [study.name for study in self._studies]
@@ -183,6 +189,8 @@ class SFStudySet:
     def deserialize(study_set: Dict):
         return SFStudySet(name=study_set['name'],
                           studies=[SFStudy.deserialize(study) for study in study_set['studies']],
+                          description=study_set['description'],
+                          info=study_set['info']
                           )
 
 
