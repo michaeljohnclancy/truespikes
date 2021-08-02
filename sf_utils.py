@@ -137,18 +137,21 @@ class SFStudy:
 
     def __init__(self, name: str, study_set_name: str, recordings: List[SFRecording]):
         self.name = name
-        self.recording_sets = recordings
+        self.recordings = recordings
         self.study_set_name = study_set_name
 
     def get_recording_names(self) -> List[str]:
-        return [recording.name for recording in self.recording_sets]
+        return [recording.name for recording in self.recordings]
 
     def get_recording(self, name) -> SFRecording:
         try:
-            return [recording_set for recording_set in self.recording_sets
+            return [recording_set for recording_set in self.recordings
                     if recording_set.name.lower() == name.lower()][0]
         except IndexError:
             raise ValueError('Recording set not found')
+
+    def get_recordings(self) -> List[SFRecording]:
+        return self.recordings
 
     @staticmethod
     def deserialize(study: Dict):
