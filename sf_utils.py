@@ -1,7 +1,7 @@
 import pandas as pd
 import requests
 import datetime
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Union
 
 import sortingview as sv
 import kachery_client as kc
@@ -74,14 +74,14 @@ class SFSorting:
     def _update_metric_data(self):
         if self._metric_data is None:
             try:
-                self._metric_data = _get_metric_metadata(
+                self._metric_data = get_metric_metadata(
                     sorter_name=self.sorter_name,
                     recording_name=self.recording_name,
                     study_name=self.study_name
                 )[0]
             except IndexError:
                 raise ValueError('Metrics not found')
-        
+
     @staticmethod
     def deserialize(sorting: Dict):
         return SFSorting(
@@ -111,6 +111,8 @@ class SFRecording:
         self.recording_url = recording_url
         self.sorting_true_url = sorting_true_url
 
+        self.geom = kc.load_json(self.recording_url)['geom']
+
     def get_recording_extractor(self, download: Optional[bool] = False) -> sv.LabboxEphysRecordingExtractor:
         return sv.LabboxEphysRecordingExtractor(self.recording_url, download=download)
 
@@ -130,7 +132,8 @@ class SFRecording:
                            study_set_name=recording_set['studySetName'], sample_rate_hz=recording_set['sampleRateHz'],
                            num_channels=recording_set['numChannels'], duration_sec=recording_set['durationSec'],
                            num_true_units=recording_set['numTrueUnits'], spike_sign=recording_set['spikeSign'],
-                           recording_url=recording_set['recordingUri'], sorting_true_url=recording_set['sortingTrueUri'])
+                           recording_url=recording_set['recordingUri'],
+                           sorting_true_url=recording_set['sortingTrueUri'])
 
 
 class SFStudy:
@@ -185,6 +188,9 @@ class SFStudySet:
         except IndexError:
             raise ValueError('Study not found')
 
+    def get_studies(self) -> List[SFStudy]:
+        return self._studies
+
     @staticmethod
     def deserialize(study_set: Dict):
         return SFStudySet(name=study_set['name'],
@@ -192,6 +198,10 @@ class SFStudySet:
                           description=study_set['description'],
                           info=study_set['info']
                           )
+
+    @staticmethod
+    def get_all_available_study_sets() -> List:
+        return [SFStudySet.deserialize(study_set=study_set) for study_set in _get_study_set_metadata()]
 
 
 def _get_recent_study_set_url() -> str:
@@ -201,20 +211,17 @@ def _get_recent_study_set_url() -> str:
 
 
 def _get_study_set_metadata(
-        study_set_name: str,
+        study_set_name: Optional[str] = None,
         study_name: Optional[str] = None,
         recording_name: Optional[str] = None
 ) -> Dict:
-    if study_set_name is None:
-        raise ValueError("Must provide a study_set name!")
     if recording_name is not None and study_name is None:
         raise ValueError("If a recording name is provided, a study name must also be provided.")
 
-    metadata = [
-        m for m in kc.load_json(_get_recent_study_set_url())['StudySets']
-        if m['name'].lower() == study_set_name.lower()
-    ][0]
+    metadata = kc.load_json(_get_recent_study_set_url())['StudySets']
 
+    if study_set_name is not None:
+        metadata = [m for m in metadata if m['name'].lower() == study_set_name.lower()][0]
     if study_name is not None:
         metadata = [m for m in metadata['studies'] if m['name'].lower() == study_name.lower()][0]
     if recording_name is not None:
@@ -236,10 +243,10 @@ def _get_sorting_metadata(
     )
 
 
-def _get_metric_metadata(
-        study_name: str,
-        recording_name: str,
-        sorter_name: str
+def get_metric_metadata(
+        study_name: Optional[str] = None,
+        recording_name: Optional[str] = None,
+        sorter_name: Optional[str] = None
 ) -> List[Dict]:
     return _filter_sf_metadata(
         metadata_url=SF_METRIC_URI,

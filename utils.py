@@ -5,23 +5,50 @@ from typing import Optional, List, Dict, Union
 import numpy as np
 import pandas as pd
 from sklearn import model_selection
-from sklearn.linear_model import LinearRegression
+from sf_utils import get_metric_metadata, SFStudySet
 
 LOG_PATH = Path('logs')
 LOG_PATH.mkdir(exist_ok=True)
 
 
+def get_study_set_metrics_data(study_set_names: List[str], metric_data: Dict = None, **kwargs) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
+    study_sets = [SFStudySet.load(study_set_name) for study_set_name in study_set_names]
+    return parse_sf_metrics(
+        metric_data if metric_data is not None else get_metric_metadata(),
+        study_names=[name for study_set in study_sets for name in study_set.get_study_names()],
+        **kwargs
+    )
 
-def parse_sf_results(
-        sf_data, sorter_names: Optional[List[str]] = None, study_names: Optional[List[str]] = None,
-        exclude_sorter_names: Optional[List[str]] = None, exclude_study_names: Optional[List[str]] = None,
+
+def get_study_metrics_data(study_names: List[str], metric_data: Dict = None, **kwargs) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
+    return parse_sf_metrics(
+        metric_data if metric_data is not None else get_metric_metadata(),
+        study_names=study_names,
+        **kwargs
+    )
+
+
+def get_recording_metrics_data(recording_names: List[str], metric_data: Dict = None, **kwargs) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
+    return parse_sf_metrics(
+        metric_data if metric_data is not None else get_metric_metadata(),
+        recording_names=recording_names,
+        **kwargs
+    )
+
+
+def parse_sf_metrics(
+        sf_data, sorter_names: Optional[List[str]] = None, recording_names: Optional[List[str]] = None,
+        study_names: Optional[List[str]] = None, exclude_sorter_names: Optional[List[str]] = None,
+        exclude_recording_names: Optional[List[str]] = None, exclude_study_names: Optional[List[str]] = None,
         metric_names: Optional[List[str]] = None, exclude_metric_names: Optional[List[str]] = None,
-        by_sorter: bool = False, by_study: bool = False, by_recording: bool = False, include_meta: bool = False,
-        train_test_split: bool = True, with_agreement_scores: bool = False,
-) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
+        by_sorter: bool = False, by_recording: bool = False, by_study: bool = False, include_meta: bool = False,
+        train_test_split: bool = False, with_agreement_scores: bool = False, one_hot_encode_sorter_name: bool = False,
+        random_state: int = 0) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
     """Parses the SpikeForest json formatted results, and can be filtered by sorter name, study name and metric."""
     if sorter_names is not None and exclude_sorter_names is not None:
         raise ValueError("Can't provide list of sorters to include and exclude!")
+    elif recording_names is not None and exclude_recording_names is not None:
+        raise ValueError("Can't provide list of recordings to include and exclude!")
     elif study_names is not None and exclude_study_names is not None:
         raise ValueError("Can't provide list of studies to include and exclude!")
     elif metric_names is not None and exclude_metric_names is not None:
@@ -44,14 +71,17 @@ def parse_sf_results(
             if ((study_names is None and exclude_study_names is None)
                 or (study_names is not None and entry['studyName'] in study_names)
                 or (exclude_study_names is not None and entry['studyName'] not in exclude_study_names)) \
-                    and ((sorter_names is None and exclude_sorter_names is None)
-                         or (sorter_names is not None and entry['sorterName'] in sorter_names)
-                         or (exclude_sorter_names is not None and entry['sorterName'] not in exclude_sorter_names)
-            ):
+                and ((sorter_names is None and exclude_sorter_names is None)
+                     or (sorter_names is not None and entry['sorterName'] in sorter_names)
+                     or (exclude_sorter_names is not None and entry['sorterName'] not in exclude_sorter_names)
+                     and ((recording_names is None and exclude_recording_names is None)
+                          or (recording_names is not None and entry['recordingName'] in recording_names)
+                          or (exclude_recording_names is not None and entry['recordingName'] not in exclude_recording_names))):
                 try:
                     entry_df = pd.DataFrame(entry['quality_metric'])
                     if with_agreement_scores:
-                        entry_df['agreement_score'] = pd.DataFrame(entry['ground_truth_comparison']['agreement_scores']).max(axis=0)
+                        entry_df['agreement_score'] = pd.DataFrame(
+                            entry['ground_truth_comparison']['agreement_scores']).max(axis=0)
 
                     else:
                         entry_df['fp'] = np.array(entry['ground_truth_comparison']['best_match_21']) == -1
@@ -68,7 +98,7 @@ def parse_sf_results(
                         f"{entry['studyName']} - {entry['recordingName']} - {entry['sorterName']} - {str(e)} \n")
 
     if metric_names is not None:
-        results = results[metric_names + [y_var]]
+        results = results[metric_names + ['studyName', 'recordingName', 'sorterName'] + [y_var]]
     elif exclude_metric_names is not None:
         results.drop(columns=exclude_metric_names, inplace=True)
 
@@ -80,31 +110,53 @@ def parse_sf_results(
             train_test_split=train_test_split, y_var_name=y_var
         )
     elif train_test_split:
-        if include_meta:
-            metrics = results.drop(columns=[y_var])
+        metrics = results.drop(columns=[y_var])
+        if not include_meta:
+            metrics = metrics.drop(columns=['studyName', 'recordingName'])
+        if one_hot_encode_sorter_name:
+            one_hot = pd.get_dummies(metrics[['sorterName']])
+            metrics = metrics.drop(columns=['sorterName'])
+            metrics = pd.concat([metrics, one_hot], axis=1)
         else:
-            metrics = results.drop(columns=[y_var, 'sorterName', 'studyName', 'recordingName'])
+            metrics = metrics.drop(columns=['sorterName'])
 
         y_data = results[y_var]
-        X_train, X_test, y_train, y_test = model_selection.train_test_split(metrics, y_data, test_size=0.2, random_state=0)
-        results = {'X_train': X_train, 'y_train': y_train, 'X_test': X_test, 'y_test': y_test}
+        X_train, X_test, y_train, y_test = model_selection.train_test_split(metrics, y_data, test_size=0.2,
+                                                                            random_state=random_state)
+        results = {'X_train': X_train.reset_index(drop=True), 'y_train': y_train.reset_index(drop=True), 'X_test': X_test.reset_index(drop=True), 'y_test': y_test.reset_index(drop=True)}
     elif not include_meta:
-        results = results.drop(columns=['sorterName', 'studyName', 'recordingName'])
+        results = results.drop(columns=['studyName', 'recordingName'])
+        if one_hot_encode_sorter_name:
+            one_hot = pd.get_dummies(results[['sorterName']])
+            results = results.drop(columns=['sorterName'])
+            results = pd.concat([results, one_hot], axis=1)
+        else:
+            results = results.drop(columns=['sorterName'])
+
+        results.reset_index(inplace=True)
 
     return results
 
 
-def _split_dataset(df: pd.DataFrame, group_by: str, remove_meta: bool = True, train_test_split: bool = True, y_var_name='fp'):
+def _split_dataset(df: pd.DataFrame, group_by: str, remove_meta: bool = True, train_test_split: bool = True,
+                   y_var_name='fp', one_hot_encode_sorter_name: bool = False, random_state: int = 0):
     grouped = df.groupby(group_by)
 
     datasets = {}
     if train_test_split:
         datasets['all_data'] = {}
     for attr_name, df in grouped:
+        metrics = df.drop(columns=[y_var_name])
         if remove_meta:
-            metrics = df.drop(columns=[y_var_name, 'sorterName', 'studyName', 'recordingName'])
+            metrics = df.drop(columns=['studyName', 'recordingName'])
+        if one_hot_encode_sorter_name:
+            one_hot = pd.get_dummies(metrics['sorterName'])
+            metrics = metrics.drop(columns=['sorterName'])
+            metrics = metrics.join(one_hot)
         else:
-            metrics = df.drop(columns=[y_var_name])
+            metrics = metrics.drop(columns=['sorterName'])
+
+        metrics.reset_index(inplace=True)
 
         y_data = df[y_var_name]
 
@@ -112,7 +164,7 @@ def _split_dataset(df: pd.DataFrame, group_by: str, remove_meta: bool = True, tr
             datasets[attr_name] = {}
             datasets[attr_name]['X_train'], datasets[attr_name]['X_test'], \
             datasets[attr_name]['y_train'], datasets[attr_name]['y_test'] = \
-                model_selection.train_test_split(metrics, y_data, test_size=0.2, random_state=0)
+                model_selection.train_test_split(metrics, y_data, test_size=0.2, random_state=random_state)
 
             if 'X_train' not in datasets['all_data']:
                 datasets['all_data']['X_train'] = datasets[attr_name]['X_train']
