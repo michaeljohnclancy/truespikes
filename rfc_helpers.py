@@ -21,6 +21,9 @@ def stratified_k_fold(X, y, model_cls, model_args=None, n_splits=5):
     if model_args is None:
         model_args = {}
 
+    X.reset_index(drop=True, inplace=True)
+    y.reset_index(drop=True, inplace=True)
+
     kf = StratifiedKFold(n_splits=n_splits)
     for train_index, test_index in kf.split(X, y):
         print('train -  {}   |   test -  {}'.format(
@@ -76,7 +79,10 @@ def plot_decision_tree(decision_tree, metric_names, fig_out: Optional[str] = Non
 
 
 def rfc_feature_importance_analysis(
-        metric_data: Dict[str, pd.DataFrame],
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        X_test: pd.DataFrame,
+        y_test: pd.Series,
         metric_names: List[str],
         model_args: Optional[Dict] = None,
         fig_title: Optional[str] = 'Feature Importances',
@@ -85,7 +91,7 @@ def rfc_feature_importance_analysis(
 
     rfcs, scores = stratified_k_fold(
         model_cls=RandomForestClassifier, model_args=model_args,
-        X=metric_data['X_train'], y=metric_data['y_train'], n_splits=5
+        X=X_train, y=y_train, n_splits=5
     )
 
     # importance_ranked_metrics = ([[metric_names[i] for i in np.argsort(rfc.feature_importances_)] for rfc in rfcs])
@@ -94,9 +100,9 @@ def rfc_feature_importance_analysis(
 
     plot_decision_tree(decision_tree=rfcs[np.argmax(scores)].estimators_[0], metric_names=metric_names, fig_out=tree_output)
 
-    print(f'Trained on {metric_data["X_train"].shape[0]}; Tested on {metric_data["X_test"].shape[0]}')
+    print(f'Trained on {X_train.shape[0]}; Tested on {X_test.shape[0]}')
 
-    test_set_f1_scores = [f1_score(rfc.predict(metric_data["X_test"]), metric_data["y_test"]) for rfc in rfcs]
+    test_set_f1_scores = [f1_score(rfc.predict(X_test), y_test) for rfc in rfcs]
     pprint.pprint(f"F1 Score for each RFC on held out test set: {test_set_f1_scores}; "
                   f"mean={np.mean(test_set_f1_scores)}; std={np.std(test_set_f1_scores)}")
 

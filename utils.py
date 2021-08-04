@@ -154,7 +154,7 @@ def parse_sf_metrics(
         else:
             results = results.drop(columns=['sorterName'])
 
-        results.reset_index(inplace=True)
+        results.reset_index(drop=True, inplace=True)
 
     return results
 
