@@ -1,26 +1,32 @@
+import json
 from collections import defaultdict
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 import numpy as np
+import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import f1_score
+from sklearn.tree import plot_tree
 from sklearn.model_selection import StratifiedKFold
 import matplotlib.pyplot as plt
 
 from sf_utils import SFStudySet
-from utils import get_study_set_metrics_data
+from utils import get_study_set_metrics_data, get_study_metrics_data
 import pprint
 
 
-def stratified_k_fold(model, X, y, n_splits=5):
+def stratified_k_fold(X, y, model_cls, model_args=None, n_splits=5):
     models = []
     scores = []
+    if model_args is None:
+        model_args = {}
 
     kf = StratifiedKFold(n_splits=n_splits)
     for train_index, test_index in kf.split(X, y):
         print('train -  {}   |   test -  {}'.format(
             np.bincount(y[train_index]), np.bincount(y[test_index])))
 
+        model = model_cls(**model_args)
         model.fit(X.iloc[train_index], y.iloc[train_index])
 
         y_test_preds = model.predict(X.iloc[test_index])
@@ -32,7 +38,7 @@ def stratified_k_fold(model, X, y, n_splits=5):
 
 def get_feature_importances(rfcs: List[RandomForestClassifier], scores: List[float]):
     importances = rfcs[np.argmax(scores)].feature_importances_
-    std = np.std([tree.feature_importances_ for tree in rfcs],
+    std = np.std([rfc.feature_importances_ for rfc in rfcs],
                  axis=0)
     return importances, std
 
@@ -57,35 +63,42 @@ def plot_rfc_feature_importances(rfcs, scores, metric_names, title='Feature impo
         plt.savefig(output)
 
 
-def rfc_feature_importance_analysis(
-        study_set_names: List[str],
-        metric_names: List[str],
-        random_state: int = 0,
-        fig_output: Optional[str] = None):
+def plot_decision_tree(decision_tree, metric_names, fig_out: Optional[str] = None):
+    fig = plt.figure(figsize=(25, 20))
+    _ = plot_tree(decision_tree,
+                  feature_names=metric_names,
+                  class_names=['True unit', 'False Positive Unit'],
+                  filled=True
+                  )
 
-    metric_data = get_study_set_metrics_data(
-        study_set_names=study_set_names,
-        train_test_split=True,
-        metric_names=metric_names,
-        random_state=random_state
-    )
+    if fig_out is not None:
+        fig.savefig(fig_out)
+
+
+def rfc_feature_importance_analysis(
+        metric_data: Dict[str, pd.DataFrame],
+        metric_names: List[str],
+        model_args: Optional[Dict] = None,
+        fig_title: Optional[str] = 'Feature Importances',
+        feature_importance_output: Optional[str] = None,
+        tree_output: Optional[str] = None):
 
     rfcs, scores = stratified_k_fold(
-        model=RandomForestClassifier(random_state=random_state),
+        model_cls=RandomForestClassifier, model_args=model_args,
         X=metric_data['X_train'], y=metric_data['y_train'], n_splits=5
     )
 
-    importance_ranked_metrics = ([[metric_names[i] for i in np.argsort(rfc.feature_importances_)] for rfc in rfcs])
+    # importance_ranked_metrics = ([[metric_names[i] for i in np.argsort(rfc.feature_importances_)] for rfc in rfcs])
 
-    plot_rfc_feature_importances(rfcs=rfcs, scores=scores, metric_names=metric_names, output=fig_output)
+    plot_rfc_feature_importances(rfcs=rfcs, scores=scores, metric_names=metric_names, title=fig_title, output=feature_importance_output)
 
-    # best_estimator = rfcs[np.argmax(scores)]
+    plot_decision_tree(decision_tree=rfcs[np.argmax(scores)].estimators_[0], metric_names=metric_names, fig_out=tree_output)
+
+    print(f'Trained on {metric_data["X_train"].shape[0]}; Tested on {metric_data["X_test"].shape[0]}')
 
     test_set_f1_scores = [f1_score(rfc.predict(metric_data["X_test"]), metric_data["y_test"]) for rfc in rfcs]
     pprint.pprint(f"F1 Score for each RFC on held out test set: {test_set_f1_scores}; "
                   f"mean={np.mean(test_set_f1_scores)}; std={np.std(test_set_f1_scores)}")
-
-    pprint.pprint(f'Metrics ranked by importance: {importance_ranked_metrics}')
 
 
 def split_study_sets_by_electrode_type(study_set_names: List[str] = None):
@@ -103,3 +116,27 @@ def split_study_sets_by_electrode_type(study_set_names: List[str] = None):
         print(f'Electrode type {k} found in study sets: {v}')
 
     return study_sets_by_electrode_type
+
+
+def split_recordings_by_probe_geometry(study_sets: List[SFStudySet], standardize_geometry: Optional[bool] = False) -> Dict[str, List[SFStudySet]]:
+    results = defaultdict(list)
+    for study_set in study_sets:
+        for study in study_set.get_studies():
+            for recording in study.get_recordings():
+                key = str(recording.geom)
+                if standardize_geometry:
+                    key = np.array(key)
+                    geom = key - key.min()
+                    key = str(geom.tolist())
+                results[key].append((recording.name, recording.study_name))
+
+    for i, geometry in enumerate(results.keys()):
+        fig, ax = plt.subplots()
+        x, y = zip(*list(eval(geometry)))
+        ax.scatter(x, y)
+        plt.savefig(f'../figures/split_by_geometry/{i}.pdf')
+
+    with open('../figures/split_by_geometry/geometries.json', 'a') as f:
+        json.dump(results.values(), f, indent=4)
+
+    return results

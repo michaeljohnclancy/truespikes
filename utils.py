@@ -5,22 +5,28 @@ from typing import Optional, List, Dict, Union
 import numpy as np
 import pandas as pd
 from sklearn import model_selection
+from sklearn.metrics import accuracy_score, f1_score
+
 from sf_utils import get_metric_metadata, SFStudySet
 
 LOG_PATH = Path('logs')
 LOG_PATH.mkdir(exist_ok=True)
 
 
-def get_study_set_metrics_data(study_set_names: List[str], metric_data: Dict = None, **kwargs) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
-    study_sets = [SFStudySet.load(study_set_name) for study_set_name in study_set_names]
+def get_study_set_metrics_data(study_set_names: List[str], metric_data: Dict = None, **kwargs
+                               ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
     return parse_sf_metrics(
         metric_data if metric_data is not None else get_metric_metadata(),
-        study_names=[name for study_set in study_sets for name in study_set.get_study_names()],
+        study_names=[study_name
+                     for study_set_name in study_set_names
+                     for study_name in SFStudySet.load(study_set_name).get_study_names()
+                     ],
         **kwargs
     )
 
 
-def get_study_metrics_data(study_names: List[str], metric_data: Dict = None, **kwargs) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
+def get_study_metrics_data(study_names: List[str], metric_data: Dict = None, **kwargs) -> Union[
+    pd.DataFrame, Dict[str, pd.DataFrame]]:
     return parse_sf_metrics(
         metric_data if metric_data is not None else get_metric_metadata(),
         study_names=study_names,
@@ -28,7 +34,8 @@ def get_study_metrics_data(study_names: List[str], metric_data: Dict = None, **k
     )
 
 
-def get_recording_metrics_data(recording_names: List[str], metric_data: Dict = None, **kwargs) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
+def get_recording_metrics_data(recording_names: List[str], metric_data: Dict = None, **kwargs) -> Union[
+    pd.DataFrame, Dict[str, pd.DataFrame]]:
     return parse_sf_metrics(
         metric_data if metric_data is not None else get_metric_metadata(),
         recording_names=recording_names,
@@ -65,19 +72,32 @@ def parse_sf_metrics(
     elif by_recording:
         group_by = 'recordingName'
 
+    sorter_names, exclude_sorter_names, study_names, exclude_study_names, \
+    recording_names, exclude_recording_names, metric_names, exclude_metric_names = convert_arguments_to_lowercase(
+        sorter_names, exclude_sorter_names, study_names, exclude_study_names,
+        recording_names, exclude_recording_names, metric_names, exclude_metric_names
+    )
+
     with open(LOG_PATH / f'parse_sf_results-{datetime.now().strftime("%Y%m%d%H%M%S")}.log', 'w') as logfile:
         results = None
         for entry in sf_data:
             if ((study_names is None and exclude_study_names is None)
-                or (study_names is not None and entry['studyName'] in study_names)
-                or (exclude_study_names is not None and entry['studyName'] not in exclude_study_names)) \
-                and ((sorter_names is None and exclude_sorter_names is None)
-                     or (sorter_names is not None and entry['sorterName'] in sorter_names)
-                     or (exclude_sorter_names is not None and entry['sorterName'] not in exclude_sorter_names)
-                     and ((recording_names is None and exclude_recording_names is None)
-                          or (recording_names is not None and entry['recordingName'] in recording_names)
-                          or (exclude_recording_names is not None and entry['recordingName'] not in exclude_recording_names))):
+                or (study_names is not None and entry['studyName'].lower() in study_names)
+                or (exclude_study_names is not None and entry['studyName'].lower() not in exclude_study_names)) \
+                    and ((sorter_names is None and exclude_sorter_names is None)
+                         or (sorter_names is not None and entry['sorterName'].lower() in sorter_names)
+                         or (exclude_sorter_names is not None and
+                             entry['sorterName'].lower() not in exclude_sorter_names)) \
+                    and ((recording_names is None and exclude_recording_names is None)
+                         or (recording_names is not None and entry['recordingName'].lower() in recording_names)
+                         or (exclude_recording_names is not None and
+                             entry['recordingName'].lower() not in exclude_recording_names)):
+
                 try:
+                    if not isinstance(entry['quality_metric'], dict):
+                        raise LookupError(f'Quality metric calculations failed serverside: {entry["quality_metric"]}')
+                    if not isinstance(entry['ground_truth_comparison'], dict):
+                        raise LookupError(f'Ground truth comparison failed serverside: {entry["ground_truth_comparison"]}')
                     entry_df = pd.DataFrame(entry['quality_metric'])
                     if with_agreement_scores:
                         entry_df['agreement_score'] = pd.DataFrame(
@@ -93,7 +113,7 @@ def parse_sf_metrics(
                         results = entry_df
                     else:
                         results = results.append(entry_df)
-                except Exception as e:
+                except LookupError as e:
                     logfile.write(
                         f"{entry['studyName']} - {entry['recordingName']} - {entry['sorterName']} - {str(e)} \n")
 
@@ -123,7 +143,8 @@ def parse_sf_metrics(
         y_data = results[y_var]
         X_train, X_test, y_train, y_test = model_selection.train_test_split(metrics, y_data, test_size=0.2,
                                                                             random_state=random_state)
-        results = {'X_train': X_train.reset_index(drop=True), 'y_train': y_train.reset_index(drop=True), 'X_test': X_test.reset_index(drop=True), 'y_test': y_test.reset_index(drop=True)}
+        results = {'X_train': X_train.reset_index(drop=True), 'y_train': y_train.reset_index(drop=True),
+                   'X_test': X_test.reset_index(drop=True), 'y_test': y_test.reset_index(drop=True)}
     elif not include_meta:
         results = results.drop(columns=['studyName', 'recordingName'])
         if one_hot_encode_sorter_name:
@@ -136,6 +157,37 @@ def parse_sf_metrics(
         results.reset_index(inplace=True)
 
     return results
+
+
+def convert_arguments_to_lowercase(
+        sorter_names: Optional[List[str]] = None,
+        recording_names: Optional[List[str]] = None,
+        study_names: Optional[List[str]] = None,
+        exclude_sorter_names: Optional[List[str]] = None,
+        exclude_recording_names: Optional[List[str]] = None,
+        exclude_study_names: Optional[List[str]] = None,
+        metric_names: Optional[List[str]] = None,
+        exclude_metric_names: Optional[List[str]] = None
+):
+    if sorter_names is not None:
+        sorter_names = [sorter_name.lower() for sorter_name in sorter_names]
+    if exclude_sorter_names is not None:
+        exclude_sorter_names = [sorter_name.lower() for sorter_name in exclude_sorter_names]
+    if study_names is not None:
+        study_names = [study_name.lower() for study_name in study_names]
+    if exclude_study_names is not None:
+        exclude_study_names = [study_name.lower() for study_name in exclude_study_names]
+    if recording_names is not None:
+        recording_names = [recording_name.lower() for recording_name in recording_names]
+    if exclude_recording_names is not None:
+        exclude_recording_names = [recording_name.lower() for recording_name in exclude_recording_names]
+    if metric_names is not None:
+        metric_names = [metric_name.lower() for metric_name in metric_names]
+    if exclude_recording_names is not None:
+        exclude_metric_names = [metric_name.lower() for metric_name in exclude_metric_names]
+
+    return sorter_names, exclude_sorter_names, study_names, exclude_study_names, \
+           recording_names, exclude_recording_names, metric_names, exclude_metric_names
 
 
 def _split_dataset(df: pd.DataFrame, group_by: str, remove_meta: bool = True, train_test_split: bool = True,
@@ -204,3 +256,19 @@ def get_performance_matrix(datasets, model, metric=None):
                                                                                  y_preds)
 
     return performance_matrix
+
+
+#dataset = get_study_set_metrics_data(STUDY_SET_NAMES, train_test_split=True, one_hot_encode_sorter_name=True)
+def score(study_set_names: List[str], model, one_hot_encode_sorter_name=False):
+    dataset = get_study_set_metrics_data(study_set_names, train_test_split=True, one_hot_encode_sorter_name=one_hot_encode_sorter_name)
+    print(dataset['X_train'].shape)
+
+    model.fit(dataset['X_train'], dataset['y_train'])
+
+    y_test_preds = model.predict(dataset['X_test'])
+    f1 = f1_score(dataset['y_test'], y_test_preds)
+
+    print(f'Linear SVC F1-Score is {f1}')
+    print(accuracy_score(dataset['y_test'], y_test_preds))
+
+
