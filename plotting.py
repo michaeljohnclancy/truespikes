@@ -7,6 +7,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import zscore
 
+from utils import filter_dataframe_outliers
+
 
 def plot_performance_matrix(performance_matrix, save_path=None, annotate=False, ax=None):
     if ax is None:
@@ -30,9 +32,7 @@ def plot_feature_histograms(
 ):
 
     fig, ax = plt.subplots(**kwargs)
-    dataset[(
-        np.abs(zscore(dataset.astype(float)) < filter_by_n_deviations).all(axis=1)
-    )].hist(ax=ax)
+    filter_dataframe_outliers(dataset, n_deviations=filter_by_n_deviations).hist(ax=ax)
 
     if title is not None:
         fig.suptitle(title)
