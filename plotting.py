@@ -53,12 +53,9 @@ def _plot_sns(
         **kwargs
 ):
 
-    if n_deviations is not None:
-        df = filter_dataframe_outliers(df=df, n_deviations=n_deviations)
-
     g = sns.FacetGrid(
         pd.melt(
-            df,
+            filter_dataframe_outliers(df=df, n_deviations=n_deviations),
             id_vars=[by],
             var_name='feature_name',
             value_vars=feature_names
@@ -88,7 +85,7 @@ def plot_feature_histograms(
 ):
     if by is None:
         fig, ax = plt.subplots(**kwargs)
-        filter_dataframe_outliers(df, n_deviations=n_deviations).hist(ax=ax)
+        filter_dataframe_outliers(df, n_deviations=n_deviations).hist(ax=ax, bins=bins)
 
         if title is not None:
             fig.suptitle(title)
