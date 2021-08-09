@@ -273,7 +273,10 @@ def score(study_set_names: List[str], model, one_hot_encode_sorter_name=False):
     print(accuracy_score(dataset['y_test'], y_test_preds))
 
 
-def filter_dataframe_outliers(df: pd.DataFrame, n_deviations):
+def filter_dataframe_outliers(df: pd.DataFrame, n_deviations: Optional[float] = None):
+    if n_deviations is None:
+        return df
+
     return df[(
         np.abs(zscore(df.select_dtypes(include=['float', 'int'])) < n_deviations).all(axis=1)
     )]
