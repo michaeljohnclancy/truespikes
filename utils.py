@@ -1,3 +1,4 @@
+import json, atexit
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, List, Dict, Union, Callable
@@ -26,8 +27,8 @@ def get_study_set_metrics_data(study_set_names: List[str], metric_data: Dict = N
     )
 
 
-def get_study_metrics_data(study_names: List[str], metric_data: Dict = None, **kwargs) -> Union[
-    pd.DataFrame, Dict[str, pd.DataFrame]]:
+def get_study_metrics_data(study_names: List[str], metric_data: Dict = None, **kwargs
+                           ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
     return parse_sf_metrics(
         metric_data if metric_data is not None else get_metric_metadata(),
         study_names=study_names,
@@ -35,8 +36,8 @@ def get_study_metrics_data(study_names: List[str], metric_data: Dict = None, **k
     )
 
 
-def get_recording_metrics_data(recording_names: List[str], metric_data: Dict = None, **kwargs) -> Union[
-    pd.DataFrame, Dict[str, pd.DataFrame]]:
+def get_recording_metrics_data(recording_names: List[str], metric_data: Dict = None, **kwargs
+                               ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
     return parse_sf_metrics(
         metric_data if metric_data is not None else get_metric_metadata(),
         recording_names=recording_names,
@@ -100,6 +101,7 @@ def parse_sf_metrics(
                     if not isinstance(entry['ground_truth_comparison'], dict):
                         raise LookupError(f'Ground truth comparison failed serverside: {entry["ground_truth_comparison"]}')
                     entry_df = pd.DataFrame(entry['quality_metric'])
+                    entry_df.columns = map(str.lower, entry_df.columns)
                     if with_agreement_scores:
                         entry_df['agreement_score'] = pd.DataFrame(
                             entry['ground_truth_comparison']['agreement_scores']).max(axis=0)
@@ -168,6 +170,7 @@ def _split_dataset(df: pd.DataFrame, group_by: str, remove_meta: bool = True, tr
     if train_test_split:
         datasets['all_data'] = {}
     for attr_name, df in grouped:
+        attr_name: str = attr_name.lower()
         metrics = df.drop(columns=[y_var_name])
         if remove_meta:
             metrics = metrics.drop(columns=['studyName', 'recordingName'])

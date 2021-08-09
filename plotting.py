@@ -118,7 +118,7 @@ def plot_feature_kdes(
 
     if by is None:
         fig, ax = plt.subplots(**kwargs)
-        filter_dataframe_outliers(df, n_deviations=n_deviations).hist(ax=ax)
+        filter_dataframe_outliers(df, n_deviations=n_deviations).plot.kde(ax=ax)
 
         if title is not None:
             fig.suptitle(title)
