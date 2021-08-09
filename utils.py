@@ -1,6 +1,6 @@
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, List, Dict, Union
+from typing import Optional, List, Dict, Union, Callable
 
 import numpy as np
 import pandas as pd
@@ -160,37 +160,6 @@ def parse_sf_metrics(
     return results
 
 
-def convert_arguments_to_lowercase(
-        sorter_names: Optional[List[str]] = None,
-        recording_names: Optional[List[str]] = None,
-        study_names: Optional[List[str]] = None,
-        exclude_sorter_names: Optional[List[str]] = None,
-        exclude_recording_names: Optional[List[str]] = None,
-        exclude_study_names: Optional[List[str]] = None,
-        metric_names: Optional[List[str]] = None,
-        exclude_metric_names: Optional[List[str]] = None
-):
-    if sorter_names is not None:
-        sorter_names = [sorter_name.lower() for sorter_name in sorter_names]
-    if exclude_sorter_names is not None:
-        exclude_sorter_names = [sorter_name.lower() for sorter_name in exclude_sorter_names]
-    if study_names is not None:
-        study_names = [study_name.lower() for study_name in study_names]
-    if exclude_study_names is not None:
-        exclude_study_names = [study_name.lower() for study_name in exclude_study_names]
-    if recording_names is not None:
-        recording_names = [recording_name.lower() for recording_name in recording_names]
-    if exclude_recording_names is not None:
-        exclude_recording_names = [recording_name.lower() for recording_name in exclude_recording_names]
-    if metric_names is not None:
-        metric_names = [metric_name.lower() for metric_name in metric_names]
-    if exclude_recording_names is not None:
-        exclude_metric_names = [metric_name.lower() for metric_name in exclude_metric_names]
-
-    return sorter_names, exclude_sorter_names, study_names, exclude_study_names, \
-           recording_names, exclude_recording_names, metric_names, exclude_metric_names
-
-
 def _split_dataset(df: pd.DataFrame, group_by: str, remove_meta: bool = True, train_test_split: bool = True,
                    y_var_name='fp', one_hot_encode_sorter_name: bool = False, random_state: int = 0):
     grouped = df.groupby(group_by)
@@ -201,7 +170,7 @@ def _split_dataset(df: pd.DataFrame, group_by: str, remove_meta: bool = True, tr
     for attr_name, df in grouped:
         metrics = df.drop(columns=[y_var_name])
         if remove_meta:
-            metrics = df.drop(columns=['studyName', 'recordingName'])
+            metrics = metrics.drop(columns=['studyName', 'recordingName'])
         if one_hot_encode_sorter_name:
             one_hot = pd.get_dummies(metrics['sorterName'])
             metrics = metrics.drop(columns=['sorterName'])
@@ -239,12 +208,44 @@ def _split_dataset(df: pd.DataFrame, group_by: str, remove_meta: bool = True, tr
     return datasets
 
 
-def get_performance_matrix(datasets, model, metric=None):
+def convert_arguments_to_lowercase(
+        sorter_names: Optional[List[str]] = None,
+        recording_names: Optional[List[str]] = None,
+        study_names: Optional[List[str]] = None,
+        exclude_sorter_names: Optional[List[str]] = None,
+        exclude_recording_names: Optional[List[str]] = None,
+        exclude_study_names: Optional[List[str]] = None,
+        metric_names: Optional[List[str]] = None,
+        exclude_metric_names: Optional[List[str]] = None
+):
+    if sorter_names is not None:
+        sorter_names = [sorter_name.lower() for sorter_name in sorter_names]
+    if exclude_sorter_names is not None:
+        exclude_sorter_names = [sorter_name.lower() for sorter_name in exclude_sorter_names]
+    if study_names is not None:
+        study_names = [study_name.lower() for study_name in study_names]
+    if exclude_study_names is not None:
+        exclude_study_names = [study_name.lower() for study_name in exclude_study_names]
+    if recording_names is not None:
+        recording_names = [recording_name.lower() for recording_name in recording_names]
+    if exclude_recording_names is not None:
+        exclude_recording_names = [recording_name.lower() for recording_name in exclude_recording_names]
+    if metric_names is not None:
+        metric_names = [metric_name.lower() for metric_name in metric_names]
+    if exclude_recording_names is not None:
+        exclude_metric_names = [metric_name.lower() for metric_name in exclude_metric_names]
+
+    return sorter_names, exclude_sorter_names, study_names, exclude_study_names, \
+           recording_names, exclude_recording_names, metric_names, exclude_metric_names
+
+
+def get_performance_matrix(datasets: Dict[str, pd.DataFrame], model_cls, metric: Union[str, Callable] = None):
     # Takes a dict with keys=sorter_names and values=the associated dataset
     sorter_names = datasets.keys()
 
     performance_matrix = pd.DataFrame(index=sorter_names, columns=sorter_names)
     for train_sorter_name in sorter_names:
+        model = model_cls()
         model.fit(datasets[train_sorter_name]['X_train'], datasets[train_sorter_name]['y_train'])
 
         for test_sorter_name in sorter_names:
@@ -259,19 +260,18 @@ def get_performance_matrix(datasets, model, metric=None):
     return performance_matrix
 
 
-#dataset = get_study_set_metrics_data(STUDY_SET_NAMES, train_test_split=True, one_hot_encode_sorter_name=True)
-def score(study_set_names: List[str], model, one_hot_encode_sorter_name=False):
-    dataset = get_study_set_metrics_data(study_set_names, train_test_split=True, one_hot_encode_sorter_name=one_hot_encode_sorter_name)
-    print(dataset['X_train'].shape)
-
-    model.fit(dataset['X_train'], dataset['y_train'])
-
-    y_test_preds = model.predict(dataset['X_test'])
-    f1 = f1_score(dataset['y_test'], y_test_preds)
-
-    print(f'Linear SVC F1-Score is {f1}')
-    print(accuracy_score(dataset['y_test'], y_test_preds))
-
+# def score(study_set_names: List[str], model, one_hot_encode_sorter_name=False):
+#     dataset = get_study_set_metrics_data(study_set_names, train_test_split=True, one_hot_encode_sorter_name=one_hot_encode_sorter_name)
+#     print(dataset['X_train'].shape)
+#
+#     model.fit(dataset['X_train'], dataset['y_train'])
+#
+#     y_test_preds = model.predict(dataset['X_test'])
+#     f1 = f1_score(dataset['y_test'], y_test_preds)
+#
+#     print(f'Linear SVC F1-Score is {f1}')
+#     print(accuracy_score(dataset['y_test'], y_test_preds))
+#
 
 def filter_dataframe_outliers(df: pd.DataFrame, n_deviations: Optional[float] = None):
     if n_deviations is None:
