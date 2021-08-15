@@ -6,7 +6,7 @@ from typing import Optional, List, Dict, Union, Callable
 import numpy as np
 import pandas as pd
 from scipy.stats import zscore
-from sklearn import model_selection
+from sklearn import model_selection, preprocessing
 from sklearn.metrics import accuracy_score, f1_score
 
 from sf_utils import get_metric_metadata, SFStudySet
@@ -52,7 +52,8 @@ def parse_sf_metrics(
         metric_names: Optional[List[str]] = None, exclude_metric_names: Optional[List[str]] = None,
         by_sorter: bool = False, by_recording: bool = False, by_study: bool = False, include_meta: bool = False,
         train_test_split: bool = False, with_agreement_scores: bool = False, one_hot_encode_sorter_name: bool = False,
-        random_state: int = 0) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
+        transformation: Optional[Callable[[pd.DataFrame], pd.DataFrame]] = None, random_state: int = 0
+) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
     """Parses the SpikeForest json formatted results, and can be filtered by sorter name, study name and metric."""
     if sorter_names is not None and exclude_sorter_names is not None:
         raise ValueError("Can't provide list of sorters to include and exclude!")
@@ -102,6 +103,10 @@ def parse_sf_metrics(
                         raise LookupError(f'Ground truth comparison failed serverside: {entry["ground_truth_comparison"]}')
                     entry_df = pd.DataFrame(entry['quality_metric'])
                     entry_df.columns = map(str.lower, entry_df.columns)
+                    entry_df.dropna(inplace=True, axis=1)
+
+                    if transformation is not None:
+                        entry_df = transformation(entry_df)
                     if with_agreement_scores:
                         entry_df['agreement_score'] = pd.DataFrame(
                             entry['ground_truth_comparison']['agreement_scores']).max(axis=0)
@@ -125,7 +130,6 @@ def parse_sf_metrics(
     elif exclude_metric_names is not None:
         results.drop(columns=exclude_metric_names, inplace=True)
 
-    results.dropna(inplace=True)
 
     if group_by is not None:
         results = _split_dataset(
@@ -276,10 +280,16 @@ def get_performance_matrix(datasets: Dict[str, pd.DataFrame], model_cls, metric:
 #     print(accuracy_score(dataset['y_test'], y_test_preds))
 #
 
-def filter_dataframe_outliers(df: pd.DataFrame, n_deviations: Optional[float] = None):
+def filter_dataframe_outliers(df: pd.DataFrame, n_deviations: Optional[float] = None) -> pd.DataFrame:
     if n_deviations is None:
         return df
 
     return df[(
         np.abs(zscore(df.select_dtypes(include=['float', 'int'])) < n_deviations).all(axis=1)
     )]
+
+def apply_standard_scalar(df: pd.DataFrame) -> pd.DataFrame:
+    x = df.values #returns a numpy array
+    min_max_scaler = preprocessing.StandardScaler()
+    x_scaled = min_max_scaler.fit_transform(x)
+    return pd.DataFrame(x_scaled, columns=df.columns)

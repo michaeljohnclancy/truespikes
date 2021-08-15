@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import requests
 import datetime
 from typing import List, Dict, Optional, Union
@@ -99,7 +100,7 @@ class SFRecording:
         return SFRecording.deserialize(_get_study_set_metadata(study_set_name, study_name, recording_name))
 
     def __init__(self, name: str, study_name: str, study_set_name: str, sample_rate_hz: int, num_channels: int,
-                 duration_sec: float, num_true_units: int, spike_sign: int, recording_url: str, sorting_true_url: str):
+                 duration_sec: float, num_true_units: int, spike_sign: int, recording_url: str, sorting_true_url: str, geom: np.ndarray):
         self.name = name
         self.study_name = study_name
         self.study_set_name = study_set_name
@@ -111,7 +112,7 @@ class SFRecording:
         self.recording_url = recording_url
         self.sorting_true_url = sorting_true_url
 
-        self.geom = kc.load_json(self.recording_url)['geom']
+        self.geom = geom
 
     def get_recording_extractor(self, download: Optional[bool] = False) -> sv.LabboxEphysRecordingExtractor:
         return sv.LabboxEphysRecordingExtractor(self.recording_url, download=download)
@@ -122,19 +123,25 @@ class SFRecording:
     def get_sorting(self, sorter_name: str) -> SFSorting:
         return SFSorting.load(sorter_name=sorter_name, recording_name=self.name, study_name=self.study_name)
 
-    def get_all_sortings(self) -> List[SFSorting]:
+    def get_sortings(self) -> List[SFSorting]:
         return [SFSorting.deserialize(sorting_dict) for sorting_dict in
                 _get_sorting_metadata(recording_name=self.name, study_name=self.study_name)]
 
     @staticmethod
     def deserialize(recording_set: Dict):
+        try:
+            geom = kc.load_json(recording_set['recordingUri'])['geom']
+        except TypeError:
+            raise LookupError('Could not load recording geometry')
+
         return SFRecording(name=recording_set['name'], study_name=recording_set['studyName'],
-                           study_set_name=recording_set['studySetName'], sample_rate_hz=recording_set['sampleRateHz'],
+                           study_set_name=recording_set['studySetName'],
+                           sample_rate_hz=recording_set['sampleRateHz'],
                            num_channels=recording_set['numChannels'], duration_sec=recording_set['durationSec'],
                            num_true_units=recording_set['numTrueUnits'], spike_sign=recording_set['spikeSign'],
                            recording_url=recording_set['recordingUri'],
-                           sorting_true_url=recording_set['sortingTrueUri'])
-
+                           sorting_true_url=recording_set['sortingTrueUri'],
+                           geom=geom)
 
 class SFStudy:
 
@@ -162,8 +169,15 @@ class SFStudy:
 
     @staticmethod
     def deserialize(study: Dict):
+        recordings = []
+        for recording in study['recordings']:
+            try:
+                recordings.append(SFRecording.deserialize(recording))
+            except LookupError as e:
+                print(e)
+
         return SFStudy(name=study['name'], study_set_name=study['studySetName'],
-                       recordings=[SFRecording.deserialize(recording) for recording in study['recordings']],
+                       recordings=recordings,
                        )
 
 
