@@ -1,3 +1,5 @@
+import numpy as np
+
 STUDY_NAMES = ['hybrid_static_tetrode', 'hybrid_static_siprobe',
                'LONG_STATIC_1200s_8c', 'LONG_STATIC_600s_8c', 'LONG_STATIC_300s_16c', 'LONG_STATIC_4800s_16c',
                'LONG_STATIC_300s_8c', 'LONG_STATIC_2400s_8c', 'LONG_STATIC_2400s_16c', 'LONG_STATIC_600s_16c',
@@ -31,3 +33,4 @@ SORTER_NAMES = {'ironclust': 0, 'jrclust': 1,
                 'spykingcircus': 6, 'tridesclous': 7}
 
 RANDOM_STATE = 0
+np.random.seed(RANDOM_STATE)

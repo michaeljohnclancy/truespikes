@@ -100,7 +100,8 @@ def parse_sf_metrics(
                     if not isinstance(entry['quality_metric'], dict):
                         raise LookupError(f'Quality metric calculations failed serverside: {entry["quality_metric"]}')
                     if not isinstance(entry['ground_truth_comparison'], dict):
-                        raise LookupError(f'Ground truth comparison failed serverside: {entry["ground_truth_comparison"]}')
+                        raise LookupError(
+                            f'Ground truth comparison failed serverside: {entry["ground_truth_comparison"]}')
                     entry_df = pd.DataFrame(entry['quality_metric'])
                     entry_df.columns = map(str.lower, entry_df.columns)
                     entry_df.dropna(inplace=True, axis=1)
@@ -129,7 +130,6 @@ def parse_sf_metrics(
         results = results[metric_names + ['studyName', 'recordingName', 'sorterName'] + [y_var]]
     elif exclude_metric_names is not None:
         results.drop(columns=exclude_metric_names, inplace=True)
-
 
     if group_by is not None:
         results = _split_dataset(
@@ -288,8 +288,17 @@ def filter_dataframe_outliers(df: pd.DataFrame, n_deviations: Optional[float] = 
         np.abs(zscore(df.select_dtypes(include=['float', 'int'])) < n_deviations).all(axis=1)
     )]
 
+
 def apply_standard_scalar(df: pd.DataFrame) -> pd.DataFrame:
-    x = df.values #returns a numpy array
+    x = df.values  # returns a numpy array
     min_max_scaler = preprocessing.StandardScaler()
     x_scaled = min_max_scaler.fit_transform(x)
     return pd.DataFrame(x_scaled, columns=df.columns)
+
+
+def stratified_sample_df(df, col, n_samples):
+    # https://stackoverflow.com/questions/44114463/stratified-sampling-in-pandas
+    n = min(n_samples, df[col].value_counts().min())
+    df_ = df.groupby(col).apply(lambda x: x.sample(n))
+    df_.index = df_.index.droplevel(0)
+    return df_
