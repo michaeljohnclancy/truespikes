@@ -1,14 +1,15 @@
-import json, atexit
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, List, Dict, Union, Callable
+from typing import Optional, List, Dict, Union, Callable, Tuple
 
 import numpy as np
 import pandas as pd
 from scipy.stats import zscore
 from sklearn import model_selection, preprocessing
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 
+from consts import *
 from sf_utils import get_metric_metadata, SFStudySet
 
 LOG_PATH = Path('logs')
@@ -162,6 +163,8 @@ def parse_sf_metrics(
             results = results.drop(columns=['sorterName'])
 
         results.reset_index(drop=True, inplace=True)
+    else:
+        results.reset_index(drop=True, inplace=True)
 
     return results
 
@@ -285,7 +288,7 @@ def filter_dataframe_outliers(df: pd.DataFrame, n_deviations: Optional[float] = 
         return df
 
     return df[(
-        np.abs(zscore(df.select_dtypes(include=['float', 'int'])) < n_deviations).all(axis=1)
+        np.abs(zscore(df.select_dtypes(include=['float'])) < n_deviations).all(axis=1)
     )]
 
 
@@ -302,3 +305,123 @@ def stratified_sample_df(df, col, n_samples):
     df_ = df.groupby(col).apply(lambda x: x.sample(n))
     df_.index = df_.index.droplevel(0)
     return df_
+
+
+def logit_transform(data):
+    return np.log(data / (1 - data))
+
+
+def inverse_logit_transform(data):
+    return 1 / (np.exp(-data) + 1)
+
+
+# Allows for log transformations x
+def trim_ones_and_zeros(df):
+    subset = df.copy()
+    epsilon = subset[subset != 0].min()
+
+    subset[subset == 1] -= epsilon
+    subset[subset == 0] = epsilon
+    return subset
+
+
+def inverse_trim_ones_and_zeros(df):
+    subset = df.copy()
+    epsilon = subset[subset != 0].min()
+
+    subset[subset == 1] += epsilon
+    subset[subset == 0] -= epsilon
+
+    return subset
+
+
+def squeezed_logit_transform(df):
+    return logit_transform(trim_ones_and_zeros(df))
+
+
+def inverse_squeezed_logit_transform(df):
+    return inverse_trim_ones_and_zeros(inverse_logit_transform(df))
+
+
+def squeezed_log_transform(df):
+    return np.log(df + 1)
+
+
+def preprocess_agreement_score_dataset(
+        agreement_score_dataset_path: Union[Path, str],
+):
+    if Path(agreement_score_dataset_path).exists():
+        data_store = pd.HDFStore(agreement_score_dataset_path, mode='r')
+        data = data_store['dataset'].copy()
+
+        print("Loaded from cache")
+    else:
+        data_store = pd.HDFStore(agreement_score_dataset_path, mode='w')
+        data: pd.DataFrame = get_study_metrics_data(
+            study_names=STATIC_TETRODE_STUDY_NAMES,
+            metric_names=METRIC_NAMES,
+            random_state=RANDOM_STATE,
+            sorter_names=SORTER_NAMES,
+            include_meta=True,
+            with_agreement_scores=True
+        ).dropna(axis=0)
+
+        data_store['dataset'] = data.copy()
+
+    data_store.close()
+
+    # Drop rows with null values.
+    return data[~data.isin([np.nan, np.inf, -np.inf]).any(1)]
+
+
+def prepare_transformed_dataset() -> Tuple[pd.DataFrame, pd.DataFrame]:
+    data_path = '/home/mclancy/truespikes/data/static_tetrode_dataset.hd5'
+    data = preprocess_agreement_score_dataset(data_path)
+    # data = stratified_sample_df(preprocess_agreement_score_dataset(data_path), 'sorterName', 1000)
+
+    data['sorter_id'] = data[['sorterName']].applymap(lambda x: SORTER_NAMES.index(str(x).lower()))
+    # data.drop(columns=['cumulative_drift', 'max_drift', 'studyName', 'recordingName', 'sorterName'], inplace=True)
+    data.drop(
+        columns=['cumulative_drift', 'max_drift', 'studyName', 'recordingName',
+                 'sorterName', 'presence_ratio', 'l_ratio', 'isi_violation', 'amplitude_cutoff'],
+        inplace=True
+    )
+
+    transformations = {'firing_rate': lambda x: np.log(x),
+                       'isi_violation': lambda x: np.log(x + 0.00001),
+                       'snr': lambda x: np.sqrt(x),
+                       'presence_ratio': squeezed_logit_transform,
+                       'amplitude_cutoff': lambda x: squeezed_logit_transform(2 * x),
+                       'isolation_distance': lambda x: np.log(x + 0.00001),
+                       'nn_hit_rate': squeezed_logit_transform,
+                       'nn_miss_rate': squeezed_logit_transform,
+                       'silhouette_score': lambda x: x,
+                       'l_ratio': lambda x: np.log(x + 0.00001),
+                       'd_prime': lambda x: np.log(x + 0.00001),
+                       'agreement_score': squeezed_logit_transform,
+                       }
+
+    transformed_data = pd.DataFrame(index=data.index, columns=data.columns)
+    for column in data.columns:
+        if column in transformations:
+            transformed_data[column] = transformations[column](data[column])
+        else:
+            transformed_data[column] = data[column]
+
+    transformed_train_data, transformed_test_data = train_test_split(
+        transformed_data, shuffle=True, test_size=0.2, stratify=transformed_data['sorter_id'])
+
+    gaussian_metrics = ["firing_rate", "snr", "isolation_distance",
+                        "silhouette_score", "nn_hit_rate",
+                        "nn_miss_rate", "d_prime"
+                        ]
+
+    standard_scalar = StandardScaler()
+    transformed_train_data[gaussian_metrics] = standard_scalar.fit_transform(transformed_train_data[gaussian_metrics])
+    transformed_test_data[gaussian_metrics] = standard_scalar.transform(transformed_test_data[gaussian_metrics])
+
+    transformed_train_data = filter_dataframe_outliers(
+        transformed_train_data, n_deviations=3
+    )
+
+    return transformed_train_data, transformed_test_data

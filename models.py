@@ -64,7 +64,7 @@ def build_heirarchical_logistic_regression_model(X_train, y_train):
     return lr_model
 
 
-def build_bayesian_linear_regression_model(X_train, y_train, metric_names, sorter_names):
+def build_bayesian_linear_regression_model(X_train, y_train, metric_names, sorter_names, batch_size=None):
     coords = {'sorter_names': sorter_names, 'metric_names': metric_names, 'n_obs': np.arange(X_train.shape[0])}
     weights_offset_init = np.random.rand(len(sorter_names), len(metric_names))
     bias_offset_init = np.random.rand(len(sorter_names), len(metric_names))
@@ -72,19 +72,25 @@ def build_bayesian_linear_regression_model(X_train, y_train, metric_names, sorte
     bias_mu_init = np.random.random(len(metric_names))
 
     with pm.Model(coords=coords) as model:
-        X_observed = pm.Minibatch(name='X_observed', data=X_train[metric_names].values, batch_size=batch_size)
-        y_observed = pm.Minibatch(name='y_observed', data=y_train.values, batch_size=batch_size)
-        sorter_idx = pm.Minibatch(name='sorter_idx', data=X_train['sorter_id'].values, batch_size=batch_size)
+        if batch_size is not None:
+            X_observed = pm.Minibatch(name='X_observed', data=X_train[metric_names].values, batch_size=batch_size)
+            y_observed = pm.Minibatch(name='y_observed', data=y_train.values, batch_size=batch_size)
+            sorter_idx = pm.Minibatch(name='sorter_idx', data=X_train['sorter_id'].values, batch_size=batch_size)
+        else:
+            X_observed = pm.Data(name='X_observed', value=X_train[metric_names].values)
+            y_observed = pm.Data(name='y_observed', value=y_train.values)
+            sorter_idx = pm.Data(name='sorter_idx', value=X_train['sorter_id'].values)
 
-        weights_mu = pm.Normal(name="weights_mu", mu=0, sigma=3, dims='metric_names',  testval=weights_mu_init)
-        weights_sigma = pm.HalfCauchy(name="weights_sigma", beta=5, dims='metric_names')
+        # Hyperpriors
+        weights_mu = pm.Normal(name="weights_mu", mu=0, sigma=5, dims='metric_names',  testval=weights_mu_init)
+        weights_sigma = pm.Exponential(name="weights_sigma", lam=1, dims='metric_names')
 
         bias_mu = pm.Normal(name="bias_mu", mu=0, sigma=1, dims='metric_names',  testval=bias_mu_init)
-        bias_sigma = pm.HalfCauchy(name="bias_sigma", beta=3, dims='metric_names')
+        bias_sigma = pm.Exponential(name="bias_sigma", lam=0.5, dims='metric_names')
 
         weights_offset = pm.Normal(
             name='weights_offset',
-            mu=0, sigma=3,
+            mu=0, sigma=1,
             testval=weights_offset_init,
             dims=('sorter_names', 'metric_names')
         )
@@ -121,7 +127,7 @@ def build_bayesian_linear_regression_model(X_train, y_train, metric_names, sorte
             )
         )
 
-        sigma = pm.HalfCauchy(name="sigma", beta=5)
+        sigma = pm.Exponential(name="sigma", lam=1)
 
         agreement_score_likelihood = pm.Normal(
             name='agreement_score_likelihood',
@@ -150,8 +156,8 @@ def build_cholesky_bayesian_linear_regression_model(X_train, y_train, metric_nam
 
         sd_dist = pm.HalfCauchy.dist(5)
 
-        weights_offset = pm.Normal(name="weights", mu=0.0, sigma=3, dims='metric_names', testval=weights_offset_init)
-        bias_offset = pm.Normal(name="bias", mu=0.0, sigma=1, dims='metric_names', testval=bias_offset_init)
+        weights_offset = pm.Normal(name="weights", mu=0.0, sigma=100, dims='metric_names', testval=weights_offset_init)
+        bias_offset = pm.Normal(name="bias", mu=0.0, sigma=3, dims='metric_names', testval=bias_offset_init)
 
         chol, corr, stds = pm.LKJCholeskyCov(name='chol', n=2, eta=2.0, sd_dist=sd_dist, compute_corr=True)
 
@@ -187,3 +193,13 @@ def build_cholesky_bayesian_linear_regression_model(X_train, y_train, metric_nam
 
         return model
 
+def build_rbf(X, feature_names):
+    ls = pm.Beta("ls", alpha=1e-2, beta=1e-4)
+    cov_func = pm.gp.cov.ExpQuad(len(feature_names), ls=ls)
+
+    # Specify the GP.
+    gp = pm.gp.Marginal(cov_func=cov_func)
+
+    # Place a GP prior over the function f.
+    sigma = pm.HalfNormal("sigma", 1)
+    y_ = gp.marginal_likelihood("y", X=X, y=y, noise=sigma)
