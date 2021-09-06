@@ -114,11 +114,6 @@ def build_bayesian_linear_regression_model(X_train, y_train, metric_names, sorte
             dims=('sorter_names', 'metric_names')
         )
 
-
-        tt.printing.Print('X_obs')(X_observed.shape)
-        tt.printing.Print('Weights')(weights[sorter_idx])
-        tt.printing.Print('Bias')(bias[sorter_idx].shape)
-
         agreement_score_estimate = pm.Deterministic(
             name='agreement_score_estimate',
             var=pm.math.sum(

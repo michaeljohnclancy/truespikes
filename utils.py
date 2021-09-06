@@ -420,8 +420,10 @@ def prepare_transformed_dataset() -> Tuple[pd.DataFrame, pd.DataFrame]:
     transformed_train_data[gaussian_metrics] = standard_scalar.fit_transform(transformed_train_data[gaussian_metrics])
     transformed_test_data[gaussian_metrics] = standard_scalar.transform(transformed_test_data[gaussian_metrics])
 
-    transformed_train_data = filter_dataframe_outliers(
-        transformed_train_data, n_deviations=3
-    )
+    # transformed_train_data = filter_dataframe_outliers(
+    #     transformed_train_data, n_deviations=5
+    # )
+    transformed_train_data.reset_index(drop=True, inplace=True)
+    transformed_test_data.reset_index(drop=True, inplace=True)
 
     return transformed_train_data, transformed_test_data
